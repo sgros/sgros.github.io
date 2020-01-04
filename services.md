@@ -15,7 +15,7 @@ R&D is a very specific and important field in which, at least in Croatia, neithe
 companies are good at with a few exceptions. The reason is that this field combines research that is specialty
 of research institutions with development that is specialty of companies.
 
-### Idea Development
+#### Idea Development
 
 If you are thinking about starting a new R&D project and you need someone to help you with steering your
 thoughts while discussing what could be done, or you need help in identifying research topics or issues,
@@ -27,7 +27,7 @@ then I can help you. Some of the project ideas I helped to articulate are:
 I'm currently working on some other ideas, too. But since they are still in the stage of idea I won't talk
 about them for now.
 
-### Project Application
+#### Project Application
 
-### Project Execution - Research Services
+#### Project Execution - Research Services
 
