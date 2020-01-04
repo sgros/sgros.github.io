@@ -11,7 +11,7 @@ description: My homepage with different stuff not belonging to blog
 # List of links in the navigation bar
 navbar-links:
   About Me: "aboutme"
-  Consulting Services: "/services/"
+  Consulting Services: "services"
   Resources:
     - Teaching: "/teaching/"
     - SysAdm Stuff: "http://www.markdowntutorial.com/"
