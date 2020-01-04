@@ -12,6 +12,7 @@ description: My homepage with different stuff not belonging to blog
 navbar-links:
   About Me: "aboutme"
   Resources:
+    - Consulting Services: "/services/"
     - Teaching: "/teaching/"
     - SysAdm Stuff: "http://www.markdowntutorial.com/"
   Author's home: "https://sgros.github.io"
@@ -146,7 +147,7 @@ date_format: "%B %-d, %Y"
 # --- Don't need to touch anything below here (but you can if you want) --- #
 
 # Output options (more information on Jekyll's site)
-timezone: "America/Vancouver"
+timezone: "Europe/Zagreb"
 markdown: kramdown
 highlighter: rouge
 permalink: /:year-:month-:day-:title/
