@@ -14,7 +14,9 @@ navbar-links:
   Consulting Services: "services"
   Resources:
     - Teaching: "/teaching/"
-    - SysAdm Stuff: "http://www.markdowntutorial.com/"
+    - EN-HR Dictionary: "http://www.zemris.fer.hr/~sgros/stuff/rjecnik.shtml"
+    - Projects: "http://www.markdowntutorial.com/"
+    - Publications: "http://www.markdowntutorial.com/"
   Official Page: "https://www.fer.unizg.hr/stjepan.gros"
 
 # Image to show in the navigation bar - image must be a square (width = height)
