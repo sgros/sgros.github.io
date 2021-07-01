@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<meta charset='utf-8'>
+<style>
+    h4 {
+        font-family: sans-serif, Arial;
+        font-size: 16px;
+        font-weight: bold;
+    }
+
+    text {
+        font-family: sans-serif, Arial;
+    }
+
+    marker {
+        stroke: #000;
+        fill-opacity: 0;
+    }
+
+    path {
+        stroke-opacity: 1;
+    }
+
+    circle {
+        stroke: gray;
+        fill: gray;
+        stroke-width: 1.5px;
+        fill-opacity: .1;
+        stroke-opacity: 1;
+    }
+
+    ellipse {
+        stroke: gray;
+        fill: gray;
+        stroke-width: 1.5px;
+        fill-opacity: .1;
+        stroke-opacity: 1;
+    }
+    #draggable {
+        text-anchor: start;
+        cursor: pointer;
+        text-anchor: middle;
+    }
+</style>
+<svg width='1750' height='950'></svg>
+<h4>Node name: </h4>
+<script src='https://d3js.org/d3.v4.min.js'></script>
+<script>
+
+    var HAS_TEXT = true
+    var ONLY_ZERO_INDEX = true
+    var SHOW_SAME_COUNT = true
+    var NAME_FONT = 13
+    var LABEL_FONT = 16
+
+    var groupIdCount = {}
+
+    function isSameSoftware(s1, s2) {
+        let s1Parts = s1.split(">")
+        let s2Parts = s2.split(">")
+        let s1SoftwareName = s1Parts[1].split("#")[0]
+        let s2SoftwareName = s2Parts[1].split("#")[0]
+        if (s1SoftwareName != s2SoftwareName) {
+            return false
+        }
+        let s1PrefixParts = s1Parts[0].split(":")
+        let s2PrefixParts = s2Parts[0].split(":")
+        if (s1PrefixParts.length != s2PrefixParts.length) {
+            return false
+        }
+        for (let i = 0; i < s1PrefixParts.length; i++) {
+            if (i == s1PrefixParts.length - 2) {
+                continue
+            }
+            if (s1PrefixParts[i] != s2PrefixParts[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
+    var softwareTextMapper = {
+        "cpe:/o:microsoft:windows_10:1809": "Windows 10",
+        "cpe:/o:microsoft:windows_server_2016:1803": "Windows Server 2016",
+        "cpe:/o:microsoft:windows_server_2019:-::~~standard~~x64~": "Windows Server 2019",
+        "cpe:/a:microsoft:internet_information_services:8.5": "IIS 8.5",
+        "cpe:/a:microsoft:.net_framework:4.8": "Microsoft .NET Framework 4.8.0",
+        "cpe:/a:microsoft:exchange_server:2016:cumulative_update_9": "Exchange Server",
+        "cpe:/a:microsoft:exchange_server:2019:cumulative_update_6": "Exchange Server",
+        "cpe:/a:microsoft:office:2019": "Microsoft Office",
+        "cpe:/a:microsoft:outlook:2019": "Microsoft Outlook",
+        "cpe:/a:microsoft:outlook:2019(with_office)": "Microsoft Outlook",
+        "cpe:/a:microsoft:active_directory:-": "Microsoft Active Directory",
+        "cpe:/a:microsoft:teams:-": "Microsoft Teams",
+        "CUSTOM:/a:windows:remote_administration_tools": "Remote Administration Tools",
+        "CUSTOM:/a:.net:fin_app_server": "Financial App Server",
+        "CUSTOM:/a:.net:fin_app_client": "Financial App Client",
+        "cpe:/a:microsoft:visual_studio_2019:16.6.5": "Visual Studio 2019",
+        "Internet_connection": "Internet Connection",
+        "cpe:/a:vmware:workstation:15.5.6": "VMware Workstation",
+        "CUSTOM:/a:vmware:vmware_virtual_router": "VMWare virtual router",
+        "CUSTOM:/a:vmware:vm_small": "VMWare Virtual Machine - small",
+        "CUSTOM:/a:vmware:vm_medium": "VMWare Virtual Machine - medium",
+        "CUSTOM:/a:vmware:vm_large": "VMWare Virtual Machine - large",
+        "CUSTOM:/a:.net:Internet_banking_server": "Internet Banking Server",
+        "cpe:/a:microsoft:sql_server:2019": "SQL Server 2019",
+        "cpe:/a:mozilla:firefox:84.0": "Mozilla Firefox"
+    }
+
+    var svg = d3.select('svg'),
+        width = +svg.attr('width'),
+        height = +svg.attr('height'),
+        color = d3.scaleOrdinal(d3.schemeCategory20),
+        valueline = d3.line()
+            .x(function (d) { return d[0]; })
+            .y(function (d) { return d[1]; })
+            .curve(d3.curveCatmullRomClosed),
+        paths,
+        groups,
+        groupIds,
+        scaleFactor = 1.2,
+        polygon,
+        centroid,
+        node,
+        link,
+        curveTypes = ['curveBasisClosed'],
+        simulation = d3.forceSimulation()
+            .force('link', d3.forceLink().id(function (d) { return d.id; })
+                .strength(function (d) {
+                    if (d.type == "network-software") {
+
+                        return 0.03
+                    } else {
+                        return 0.28
+                    }
+                }).distance(function (d) {
+                    if (d.type == "network-software") {
+                        return 100
+                    } else if (d.type == "service") {
+                        return 80
+                    } else if (d.type == "user-service") {
+                        return 100
+                    } else if (d.type == "computer") {
+                        if (d.target.id.includes("remote_administration_tools")) {
+                            return 60
+                        } else {
+                            return 40
+                        }
+                    } else if (d.type == "user") {
+                        return 150
+                    }
+                }))
+            .force('charge', d3.forceManyBody().strength(-110).distanceMax(250))
+            .force('center', d3.forceCenter(width / 2, height / 2));
+
+    d3.json('https://raw.githubusercontent.com/ivan-ikl/ITS-model-dataset/main/demo-financial-institution/3-rules-5-roles/outputs/outputs-5-900-0.json', function (error, results) {
+        if (error) throw error;
+        let computers = results.computers
+        let nodes = []
+        let links = []
+        let nodeNameIndex = {}
+        let zeroIndexSoftware = new Set()
+        let networkSoftware = {}
+        let networkComputers = {}
+        let zeroIndexSameSoftwareCount = {}
+        let allSoftware = new Set()
+        let computerSoftware = {}
+        let computerSameCount = {}
+        // network segments
+        for (let computer in computers) {
+            let networkSegments = computers[computer]["network_idn"]
+            if (networkSegments.length > 1) {
+                console.log("Computer with more than one network: " + computer)
+            } else if (networkSegments.length == 1) {
+                let network = networkSegments[0]
+                if (!(network in networkComputers)) {
+                    networkComputers[network] = []
+                }
+                networkComputers[network].push(computer)
+            }
+            let installedSoftware = computers[computer]["installed_software"]
+            for (let softwareIdn in installedSoftware) {
+                if (computerSoftware[computer] == undefined) {
+                    computerSoftware[computer] = []
+                }
+                computerSoftware[computer].push(softwareIdn)
+                let networkSegments = installedSoftware[softwareIdn]["network_idn"]
+                if (networkSegments.length > 1) {
+                    console.log("Software with more than one network: " + softwareIdn)
+                } else if (networkSegments.length == 1) {
+                    let network = networkSegments[0]
+                    if (!(network in networkSoftware)) {
+                        networkSoftware[network] = []
+                    }
+                    networkSoftware[network].push(softwareIdn)
+                }
+            }
+        }
+        // zero index
+        for (let computer in computers) {
+            let installedSoftware = computers[computer]["installed_software"]
+            for (let softwareIdn in installedSoftware) {
+                if (installedSoftware[softwareIdn]["person_index"] == 0) {
+                    zeroIndexSoftware.add(softwareIdn)
+                }
+                allSoftware.add(softwareIdn)
+            }
+        }
+        for (let zeroSoftware of zeroIndexSoftware) {
+            let totalSameSoftware = 0
+            for (let software of allSoftware) {
+                if (isSameSoftware(zeroSoftware, software)) {
+                    totalSameSoftware++
+                }
+            }
+            zeroIndexSameSoftwareCount[zeroSoftware] = totalSameSoftware
+        }
+        for (let computer in computerSoftware) {
+            let count = -1
+            for (let softwareIdn of computerSoftware[computer]) {
+                if (zeroIndexSameSoftwareCount[softwareIdn] == undefined) {
+                    continue
+                }
+                if (count != -1 && count != zeroIndexSameSoftwareCount[softwareIdn]) {
+                    console.log("Inconsistent count!")
+                }
+                count = zeroIndexSameSoftwareCount[softwareIdn]
+                computerSameCount[computer] = count
+            }
+        }
+
+        // network services
+        for (let computer in computers) {
+            for (let softwareIdn in computers[computer]["installed_software"]) {
+                if (!zeroIndexSoftware.has(softwareIdn)) {
+                    continue
+                }
+                let services = computers[computer]
+                ["installed_software"][softwareIdn]["provides_network_services"]
+                if (services.length == 0) {
+                    continue
+                }
+                if (softwareIdn.includes("Internet_connection")) {
+                    continue
+                }
+                if (nodeNameIndex[softwareIdn] == undefined) {
+                    nodes.push({
+                        "id": softwareIdn,
+                        "type": "software",
+                    })
+                    nodeNameIndex[softwareIdn] = nodes.length - 1
+                }
+                for (let service of services) {
+                    let serviceFullName = service + "-" + softwareIdn
+                    if (nodeNameIndex[serviceFullName] == undefined) {
+                        nodes.push({
+                            "id": serviceFullName,
+                            "type": "service",
+                        })
+                        nodeNameIndex[serviceFullName] = nodes.length - 1
+                    }
+                    links.push({
+                        "source": nodes[nodeNameIndex[softwareIdn]],
+                        "target": nodes[nodeNameIndex[serviceFullName]],
+                        "type": "service",
+                    })
+                }
+            }
+        }
+
+        // user services
+        for (let computer in computers) {
+            for (let softwareIdn in computers[computer]["installed_software"]) {
+                if (!zeroIndexSoftware.has(softwareIdn)) {
+                    continue
+                }
+                let services = computers[computer]
+                ["installed_software"][softwareIdn]["provides_user_services"]
+                if (services.length == 0) {
+                    continue
+                }
+                if (nodeNameIndex[softwareIdn] == undefined) {
+                    nodes.push({
+                        "id": softwareIdn,
+                        "type": "software",
+                    })
+                    nodeNameIndex[softwareIdn] = nodes.length - 1
+                }
+                for (let service of services) {
+                    let serviceFullName = service + "-" + softwareIdn
+                    if (nodeNameIndex[serviceFullName] == undefined) {
+                        nodes.push({
+                            "id": serviceFullName,
+                            "type": "user-service",
+                        })
+                        nodeNameIndex[serviceFullName] = nodes.length - 1
+                    }
+                    links.push({
+                        "source": nodes[nodeNameIndex[softwareIdn]],
+                        "target": nodes[nodeNameIndex[serviceFullName]],
+                        "type": "user-service",
+                    })
+                }
+            }
+        }
+        // computers
+        for (let computer in computers) {
+            let firstUser = true
+            for (let software of computers[computer]["installed_software_idns"]) {
+                if (nodeNameIndex[software] == undefined) {
+                    continue
+                }
+                if (nodeNameIndex[computer] == undefined) {
+                    nodes.push({
+                        "id": computer,
+                        "type": "computer"
+                    })
+                    nodeNameIndex[computer] = nodes.length - 1
+                }
+                links.push({
+                    "source": nodes[nodeNameIndex[computer]],
+                    "target": nodes[nodeNameIndex[software]],
+                    "type": "computer",
+                })
+                if (firstUser) {
+                    firstUser = false
+                    let user = computers[computer]["installed_software"][software]["person_group_id"]
+                    if (user == undefined || user == null) {
+                        continue
+                    }
+                    if (nodeNameIndex[user] == undefined) {
+                        nodes.push({
+                            "id": user,
+                            "type": "user"
+                        })
+                        nodeNameIndex[user] = nodes.length - 1
+                    }
+                    links.push({
+                        "source": nodes[nodeNameIndex[computer]],
+                        "target": nodes[nodeNameIndex[user]],
+                        "type": "user",
+                    })
+                }
+            }
+        }
+        // software networks
+        for (let network in networkSoftware) {
+            let softwareIdns = networkSoftware[network]
+            for (let i = 0; i < (softwareIdns.length - 1); i++) {
+                let nodeNameIndex1 = nodeNameIndex[softwareIdns[i]]
+                if (nodeNameIndex1 == undefined) {
+                    continue
+                }
+                for (let j = i + 1; j < softwareIdns.length; j++) {
+                    let nodeNameIndex2 = nodeNameIndex[softwareIdns[j]]
+                    if (nodeNameIndex2 == undefined) {
+                        continue
+                    }
+                    links.push({
+                        "source": nodes[nodeNameIndex1],
+                        "target": nodes[nodeNameIndex2],
+                        "type": "network-software"
+                    })
+                }
+            }
+        }
+        // computer networks
+        for (let network in networkComputers) {
+            let computerIdns = networkComputers[network]
+            for (let i = 0; i < (computerIdns.length - 1); i++) {
+                let nodeNameIndex1 = nodeNameIndex[computerIdns[i]]
+                if (nodeNameIndex1 == undefined) {
+                    continue
+                }
+                for (let j = i + 1; j < computerIdns.length; j++) {
+                    let nodeNameIndex2 = nodeNameIndex[computerIdns[j]]
+                    if (nodeNameIndex2 == undefined) {
+                        continue
+                    }
+                    links.push({
+                        "source": nodes[nodeNameIndex1],
+                        "target": nodes[nodeNameIndex2],
+                        "type": "network-software"
+                    })
+                }
+            }
+        }
+
+        // create groups, links and nodes
+        groups = svg.append('g').attr('class', 'groups');
+
+        let groupNodes = {}
+        for (let t of nodes) {
+            t["group"] = -1
+            for (let network in networkSoftware) {
+                if (networkSoftware[network].includes(t.id)) {
+                    t["group"] = network
+                    if (groupNodes[network] == undefined) {
+                        groupNodes[network] = []
+                    }
+                    groupNodes[network].push(t.id)
+                }
+            }
+        }
+        for (let t of nodes) {
+            if (t["group"] == undefined) {
+                t["group"] = -1
+            }
+            for (let network in networkComputers) {
+                if (networkComputers[network].includes(t.id)) {
+                    t["group"] = network
+                    if (groupNodes[network] == undefined) {
+                        groupNodes[network] = []
+                    }
+                    groupNodes[network].push(t.id)
+                }
+            }
+        }
+
+        let nodesSingleGroup = []
+        let nodesTwoGroupPairs = []
+        for (let network in groupNodes) {
+            let group = groupNodes[network]
+            if (group.length == 2) {
+                let ellipseData = []
+                ellipseData.push(nodes[nodeNameIndex[group[0]]])
+                ellipseData.push(nodes[nodeNameIndex[group[1]]])
+                nodesTwoGroupPairs.push(ellipseData)
+            } else if (group.length == 1) {
+                nodesSingleGroup.push(nodes[nodeNameIndex[group[0]]])
+            }
+        }
+
+        circle = svg.append('g')
+            .attr('class', 'circle')
+            .selectAll('circle')
+            .data(nodesSingleGroup)
+            .enter().append('circle')
+            .attr('r', 60)
+
+        ellipse = svg.append('g')
+            .attr('class', 'ellipse')
+            .selectAll('ellipse')
+            .data(nodesTwoGroupPairs)
+            .enter().append('ellipse')
+
+        link = svg.append('g')
+            .attr('class', 'links')
+            .selectAll('line')
+            .data(links)
+            .enter().append('line')
+            .attr('stroke-width', function (d) { return 1; });
+
+        node = svg.append('g')
+            .attr('class', 'nodes')
+            .selectAll('image')
+            .data(nodes)
+            .enter().append('image')
+            .attr("xlink:href", function (d) {
+                if (d.type === "software") {
+                    return "https://raw.githubusercontent.com/ivan-ikl/ITS-model-dataset/main/visualization-images/binary.png";
+                } else if (d.type == "computer") {
+                    return "https://raw.githubusercontent.com/ivan-ikl/ITS-model-dataset/main/visualization-images/computer.png"
+                } else if (d.type == "service") {
+                    return "https://raw.githubusercontent.com/ivan-ikl/ITS-model-dataset/main/visualization-images/service.png"
+                } else if (d.type == "user-service") {
+                    return "https://raw.githubusercontent.com/ivan-ikl/ITS-model-dataset/main/visualization-images/customer.png"
+                } else if (d.type == "user") {
+                    return "https://raw.githubusercontent.com/ivan-ikl/ITS-model-dataset/main/visualization-images/user.png"
+                } 
+            })
+            .attr("x", function (d) {
+                return -15
+            })
+            .attr("y", function (d) {
+                return -15
+            })
+            .attr("height", function (d) {
+                return 30
+            })
+            .attr("width", function (d) {
+                return 30
+            })
+            .on("mouseenter", function (d) {
+                d3.selectAll("h4").text("Node name: " + d.id)
+            })
+            .on("mouseleave", function () {
+                d3.selectAll("h4").text("Node name: ")
+            })
+            .call(d3.drag()
+                .on('start', dragstarted)
+                .on('drag', dragged)
+                .on('end', dragended));
+
+        // count members of each group. Groups with less
+        // than 3 member will not be considered (creating
+        // a convex hull need 3 points at least)
+        groupIds = d3.set(nodes.map(function (n) { return +n.group; }))
+            .values()
+            .map(function (groupId) {
+                return {
+                    groupId: groupId,
+                    count: nodes.filter(function (n) { return +n.group == groupId; }).length
+                };
+            })
+            .filter(function (group) { return group.count > 2 && group.groupId != -1; })
+            .map(function (group) { return group.groupId; });
+
+        for (let groupId of groupIds) {
+            groupIdCount[groupId] = nodes.filter(function (n) { return +n.group == groupId; }).length
+        }
+
+        paths = groups.selectAll('.path_placeholder')
+            .data(groupIds, function (d) { return +d; })
+            .enter()
+            .append('g')
+            .attr('class', 'path_placeholder')
+            .append('path')
+            .attr('stroke', function (d) { return "gray"; })
+            .attr('fill', function (d) { return "gray"; })
+            .attr("fill-opacity", 0.1)
+            .attr('opacity', 0);
+
+        paths
+            .transition()
+            .duration(2000)
+            .attr('opacity', 1);
+
+        // add interaction to the groups
+        // groups.selectAll('.path_placeholder')
+        //     .call(d3.drag()
+        //         .on('start', group_dragstarted)
+        //         .on('drag', group_dragged)
+        //         .on('end', group_dragended)
+        //     );
+
+        let textDataName = []
+        let textDataZeroCount = []
+        if (HAS_TEXT) {
+            textDataName = nodes
+        }
+        if (ONLY_ZERO_INDEX && SHOW_SAME_COUNT) {
+            textDataZeroCount = nodes
+        }
+        nodeNameText = svg.append("g").selectAll("text")
+            .data(textDataName)
+            .enter().append("text")
+            .attr("dx", 0)
+            .attr("dy", 23)
+            .text(function (d) {
+                if (d.type == "computer") {
+                    let name = ""
+                    for (let i = 0; i < d.id.length; i++) {
+                        if (d.id[i] == ":") {
+                            name += "."
+                        } else {
+                            name += d.id[i]
+                        }
+                    }
+                    return name.replace("None", "Server")
+                } else if (d.type == "service" || d.type == "user-service") {
+                    return d.id.split("-")[0]
+                } else if (d.type == "user") {
+                    return d.id
+                } else {
+                    let softwareName = d.id.split(">")[1].split("#")[0]
+                    let name = softwareTextMapper[softwareName]
+                    if (name == "Microsoft Office") {
+                        return "Office"
+                    } else if (name == "Microsoft Outlook") {
+                        return "Outlook"
+                    } else if (name == "Mozilla Firefox") {
+                        return "Firefox"
+                    } else {
+                        return name
+                    }
+                }
+            })
+            .attr("text-anchor", "middle")
+            .attr("font-size", NAME_FONT.toString() + "px")
+
+        softwareCountText = svg.append("g").selectAll("text")
+            .data(textDataZeroCount)
+            .enter().append("text")
+            .attr("dx", 0)
+            .attr("dy", 0)
+            .text(function (d) {
+                if (d.type == "computer") {
+                    let s = computerSameCount[d.id].toString()
+                    return s
+                } else {
+                    return ""
+                }
+            })
+            .attr("text-anchor", "middle")
+            .attr("font-size", LABEL_FONT.toString() + "px")
+            .style("fill", "white")
+
+        node.append('title')
+            .text(function (d) { return d.id; })
+
+        simulation
+            .nodes(nodes)
+            .on('tick', ticked)
+            .force('link')
+            .links(links);
+
+        svg.append("svg:defs").selectAll("marker")
+            .data(["end"])
+            .enter().append("svg:marker")
+            .attr("id", String)
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 40)
+            .attr("refY", 0)
+            .attr("markerWidth", 10)
+            .attr("markerHeight", 10)
+            .attr("orient", "auto")
+            .attr("stroke", "black")
+            .append("svg:path")
+            .attr("d", "M0,-5L10,0L0,5");
+
+        function ticked() {
+            link
+                .attr('x1', function (d) { return d.source.x; })
+                .attr('y1', function (d) { return d.source.y; })
+                .attr('x2', function (d) { return d.target.x; })
+                .attr('y2', function (d) { return d.target.y; })
+                .attr("opacity", function (d) {
+                    if (d.type == "network-software") {
+                        return 0
+                    } else {
+                        return 1
+                    }
+                })
+                .attr("stroke", function (d) {
+                    if (d.type == "service" || d.type == "user-service") {
+                        return "black"
+                    } else if (d.type == "computer") {
+                        return "red"
+                    } else if (d.type == "network-software") {
+                        return "green"
+                    } else {
+                        return "black"
+                    }
+                })
+                .attr("stroke-width", function (d) {
+                    if (d.type == "service" || d.type == "user-service") {
+                        return 1.0
+                    } else {
+                        return 1.0
+                    }
+                }).style("stroke-dasharray", function (d) {
+                    if (d.type == "user") {
+                        return ("4")
+                    } else {
+                        return ("0")
+                    }
+                });
+            node
+                .attr('cx', function (d) { return d.x; })
+                .attr('cy', function (d) { return d.y; })
+                .attr("transform", function (d) {
+                    return "translate(" + d.x + "," + d.y + ")";
+                });
+
+            nodeNameText
+                .attr("x", function (d) { return d.x; })
+                .attr("y", function (d) { return d.y; });
+
+            softwareCountText
+                .attr("x", function (d) { return d.x; })
+                .attr("y", function (d) { return d.y; });
+
+            circle
+                .attr('cx', function (d) { return d.x; })
+                .attr('cy', function (d) { return d.y; });
+
+            ellipse
+                .attr('cx', function (d) {
+                    let a = d[0]
+                    let b = d[1]
+                    return (a.x + b.x) / 2.0
+                })
+                .attr('cy', function (d) {
+                    let a = d[0]
+                    let b = d[1]
+                    return (a.y + b.y) / 2.0
+                })
+                .attr('rx', function (d) {
+                    let a = d[0]
+                    let b = d[1]
+                    let xd = (a.x - b.x)
+                    let yd = (a.y - b.y)
+                    let distance = Math.sqrt(xd * xd + yd * yd)
+                    return distance / 2.0 + 30
+                })
+                .attr('ry', function (d) {
+                    return 50;
+                })
+                .attr("transform", function (d) {
+                    let a = d[0]
+                    let b = d[1]
+                    let x = (a.x + b.x) / 2.0
+                    let y = (a.y + b.y) / 2.0
+                    let rotation = Math.atan2(a.y - b.y, a.x - b.x) * 180 / Math.PI
+                    return "rotate(" + rotation.toString() + "," + x.toString() + "," + y.toString() + ")"
+                })
+
+            updateGroups();
+        }
+
+    });
+
+
+
+    // select nodes of the group, retrieve its positions
+    // and return the convex hull of the specified points
+    // (3 points as minimum, otherwise returns null)
+    var polygonGenerator = function (groupId) {
+        var node_coords = node
+            .filter(function (d) { return d.group == groupId; })
+            .data()
+            .map(function (d) { return [d.x, d.y]; });
+
+        return d3.polygonHull(node_coords);
+    };
+
+    function updateGroups() {
+        groupIds.forEach(function (groupId) {
+            var path = paths.filter(function (d) { return d == groupId; })
+                .attr('transform', 'scale(1) translate(0,0)')
+                .attr('d', function (d) {
+                    polygon = polygonGenerator(d);
+                    centroid = d3.polygonCentroid(polygon);
+
+                    // to scale the shape properly around its points:
+                    // move the 'g' element to the centroid point, translate
+                    // all the path around the center of the 'g' and then
+                    // we can scale the 'g' element properly
+                    return valueline(
+                        polygon.map(function (point) {
+                            return [point[0] - centroid[0], point[1] - centroid[1]];
+                        })
+                    );
+                });
+
+            d3.select(path.node().parentNode).attr('transform', function (d) {
+                let scaleFactor = 1.45
+                if (groupIdCount[groupId] == 3) {
+                    scaleFactor = 1.6
+                }
+                return 'translate(' + centroid[0] + ',' + (centroid[1]) + ') scale(' + scaleFactor + ')'
+            });
+        });
+    }
+
+
+    // drag nodes
+    function dragstarted(d) {
+        if (!d3.event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+    }
+
+    function dragged(d) {
+        d.fx = d3.event.x;
+        d.fy = d3.event.y;
+    }
+
+    function dragended(d) {
+        if (!d3.event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+    }
+
+    // drag groups
+    function group_dragstarted(groupId) {
+        if (!d3.event.active) simulation.alphaTarget(0.3).restart();
+        d3.select(this).select('path').style('stroke-width', 3);
+    }
+
+    function group_dragged(groupId) {
+        node
+            .filter(function (d) { return d.group == groupId; })
+            .each(function (d) {
+                d.x += d3.event.dx;
+                d.y += d3.event.dy;
+            })
+    }
+
+    function group_dragended(groupId) {
+        if (!d3.event.active) simulation.alphaTarget(0.3).restart();
+        d3.select(this).select('path').style('stroke-width', 1);
+    }
+
+</script>
